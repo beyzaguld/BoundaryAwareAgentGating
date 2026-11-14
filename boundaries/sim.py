@@ -78,3 +78,22 @@ def _score(user, tool, cat, recip, scope):
             - user["w_recip"] * RECIPIENTS[recip]
             - user["w_scope"] * SCOPES[scope]
             + user["pair_offset"][(tool, cat)])
+
+
+def _typical_recipient(tool):
+    return "team" if TOOLS[tool][1] else "none"
+
+
+def _write_rules(rng, user, coverage):
+    """The user's stated boundaries: coarse, incomplete and occasionally misspecified."""
+    rules = {}
+    for t in TOOLS:
+        for c in CATEGORIES:
+            if rng.random() >= coverage:
+                continue
+            m = _score(user, t, c, _typical_recipient(t), "single")
+            rule = "allow" if m > RULE_MARGIN else "deny" if m < -RULE_MARGIN else "ask"
+            if rng.random() < RULE_FLIP_PROB:
+                rule = rng.choice([r for r in ("allow", "ask", "deny") if r != rule])
+            rules[(t, c)] = rule
+    return rules
