@@ -73,3 +73,12 @@ def resolve(decisions, y, ask_acc0, habituation, rng):
     user_says_yes = np.where(correct, y == 1, y == 0)
     executed = (decisions == EXECUTE) | (asked & user_says_yes)
     return executed, acc
+
+
+# ---------------------------------------------------------------- policies
+def policy_broad(df):
+    return np.full(len(df), EXECUTE)
+
+
+def policy_always_ask(df):
+    return np.full(len(df), ASK)
