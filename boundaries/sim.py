@@ -97,3 +97,31 @@ def _write_rules(rng, user, coverage):
                 rule = rng.choice([r for r in ("allow", "ask", "deny") if r != rule])
             rules[(t, c)] = rule
     return rules
+
+
+def _sample_action(rng, user, mistake_rate):
+    tool = list(TOOLS)[rng.choice(len(TOOLS), p=TOOL_FREQ)]
+    cat = list(CATEGORIES)[rng.choice(len(CATEGORIES), p=CAT_FREQ)]
+    recip = EXTERNAL_RECIP[rng.choice(4, p=EXTERNAL_RECIP_FREQ)] if TOOLS[tool][1] else "none"
+    scope = list(SCOPES)[rng.choice(3, p=SCOPE_FREQ)]
+    mistake = "none"
+    penalty = 0.0
+    if rng.random() < mistake_rate:
+        mistake = MISTAKE_TYPES[rng.integers(3)]
+        if mistake == "wrong_recipient" and not TOOLS[tool][1]:
+            mistake = "overbroad_scope"
+        if mistake == "off_task":
+            penalty = 3.0
+        elif mistake == "wrong_recipient":
+            recip, penalty = "external_unknown", 2.0
+        else:
+            scope, penalty = "bulk", 1.5
+    # noisy task-relevance signal the agent can observe (e.g. from its own plan)
+    relevance = rng.beta(2, 5) if mistake == "off_task" else rng.beta(5, 2)
+    score = _score(user, tool, cat, recip, scope) - penalty + rng.normal(0, 0.5)
+    return {
+        "tool": tool, "category": cat, "recipient": recip, "scope": scope,
+        "reversible": int(TOOLS[tool][0]), "external": int(TOOLS[tool][1]),
+        "relevance": relevance, "mistake": mistake, "latent_score": score,
+        "approve": int(score > 0),
+    }
