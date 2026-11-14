@@ -51,3 +51,30 @@ class SimConfig:
     actions_per_user: int = 60
     rule_coverage: float = 0.6   # share of (tool, category) pairs for which a user writes a rule
     mistake_rate: float = 0.15   # share of agent proposals that contain an injected agent error
+
+
+def _sample_user(rng, uid):
+    names = list(ARCHETYPES)
+    arche = names[rng.choice(len(names), p=[ARCHETYPES[n][2] for n in names])]
+    base, scale, _ = ARCHETYPES[arche]
+    return {
+        "user_id": uid,
+        "archetype": arche,
+        "base": base + rng.normal(0, 0.3),
+        "w_tool": scale * rng.lognormal(0, 0.25),
+        "w_cat": {c: scale * rng.lognormal(0, 0.4) for c in CATEGORIES},
+        "w_recip": scale * rng.lognormal(0, 0.3),
+        "w_scope": scale * rng.lognormal(0, 0.3),
+        # idiosyncratic per-pair preference not explained by the shared risk structure
+        "pair_offset": {(t, c): rng.normal(0, 0.6) for t in TOOLS for c in CATEGORIES},
+    }
+
+
+def _score(user, tool, cat, recip, scope):
+    """Deterministic part of a user's approval score (positive = would approve)."""
+    return (user["base"]
+            - user["w_tool"] * TOOLS[tool][2]
+            - user["w_cat"][cat] * CATEGORIES[cat]
+            - user["w_recip"] * RECIPIENTS[recip]
+            - user["w_scope"] * SCOPES[scope]
+            + user["pair_offset"][(tool, cat)])
