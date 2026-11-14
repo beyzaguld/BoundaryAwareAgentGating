@@ -82,3 +82,19 @@ def policy_broad(df):
 
 def policy_always_ask(df):
     return np.full(len(df), ASK)
+
+
+def static_tier(df):
+    """Generic risk tier used when no user rule applies: confirm irreversible or external actions."""
+    risky = (df["reversible"] == 0) | (df["external"] == 1)
+    return np.where(risky, ASK, EXECUTE)
+
+
+def policy_rules(df, with_ask=True):
+    """Design A. Explicit user rules first; static risk tier for unruled pairs.
+    with_ask=False is the allow/deny-list ablation (ask rules and fallback both execute)."""
+    out = static_tier(df) if with_ask else np.full(len(df), EXECUTE)
+    out = np.where(df["rule"] == "allow", EXECUTE, out)
+    out = np.where(df["rule"] == "ask", ASK if with_ask else EXECUTE, out)
+    out = np.where(df["rule"] == "deny", BLOCK, out)
+    return out
