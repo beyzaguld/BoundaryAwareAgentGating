@@ -60,3 +60,16 @@ def build_features(df, rules, use_boundaries=True):
             "same_tool_deny": same_tool, "same_cat_deny": same_cat,
         }, index=df.index))
     return pd.concat(parts, axis=1).astype(float)
+
+
+# ---------------------------------------------------------------- simulated confirmation
+def resolve(decisions, y, ask_acc0, habituation, rng):
+    """Outcome of each decision. An ASK is answered by the simulated user, whose accuracy
+    drops with the share of actions they are asked about (confirmation fatigue).
+    Returns executed (bool array) and the user accuracy used."""
+    asked = decisions == ASK
+    acc = max(ask_acc0 - habituation * asked.mean(), 0.5)
+    correct = rng.random(len(y)) < acc
+    user_says_yes = np.where(correct, y == 1, y == 0)
+    executed = (decisions == EXECUTE) | (asked & user_says_yes)
+    return executed, acc
