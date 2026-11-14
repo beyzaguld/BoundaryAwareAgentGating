@@ -125,3 +125,24 @@ def _sample_action(rng, user, mistake_rate):
         "relevance": relevance, "mistake": mistake, "latent_score": score,
         "approve": int(score > 0),
     }
+
+
+def generate(cfg: SimConfig, seed: int):
+    """Return (actions DataFrame, rules dict user_id -> {(tool, cat): rule})."""
+    rng = np.random.default_rng(seed)
+    rows, all_rules = [], {}
+    for uid in range(cfg.n_users):
+        user = _sample_user(rng, uid)
+        all_rules[uid] = _write_rules(rng, user, cfg.rule_coverage)
+        for _ in range(cfg.actions_per_user):
+            a = _sample_action(rng, user, cfg.mistake_rate)
+            a.update(user_id=uid, archetype=user["archetype"])
+            a["rule"] = all_rules[uid].get((a["tool"], a["category"]), "none")
+            rows.append(a)
+    return pd.DataFrame(rows), all_rules
+
+
+def describe(row):
+    """Readable one-line description of an action, used for case-level error analysis."""
+    tgt = f" to {row['recipient']}" if row["recipient"] != "none" else ""
+    return f"{row['tool']}({row['category']}, {row['scope']}){tgt}"
