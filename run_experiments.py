@@ -108,3 +108,69 @@ def coverage_sweep(seeds, coverages):
                 rows.append({"coverage": cov, "seed": s, "policy": name,
                              **evaluate(test, d, np.random.default_rng(s))})
     return pd.DataFrame(rows)
+
+
+def cases(test, dec, models, k=4):
+    """Representative successes and failures of Design B versus Design A (seed 0)."""
+    t = test.copy()
+    names = {EXECUTE: "execute", ASK: "ask", BLOCK: "block"}
+    t["A"] = [names[x] for x in dec["A_rules"]]
+    t["B"] = [names[x] for x in dec["B_full"]]
+    t["desc"] = t.apply(describe, axis=1)
+    cols = ["desc", "archetype", "rule", "relevance", "mistake", "approve", "A", "B"]
+    sel = {
+        "B_catches_A_misses": t[(t.approve == 0) & (t.A == "execute") & (t.B != "execute")],
+        "B_executes_unwanted": t[(t.approve == 0) & (t.B == "execute")],
+        "B_saves_prompt": t[(t.approve == 1) & (t.A == "ask") & (t.B == "execute")],
+        "B_overblocks": t[(t.approve == 1) & (t.B == "block")],
+    }
+    out = {name: v[cols].head(k).round(2).to_dict(orient="records") for name, v in sel.items()}
+    out.update({f"n_{name}": int(len(v)) for name, v in sel.items()})
+    return out
+
+
+def summarise(df, keys, metrics):
+    out = []
+    for key, g in df.groupby(keys):
+        row = dict(zip(keys if isinstance(keys, list) else [keys], key if isinstance(key, tuple) else (key,)))
+        for m in metrics:
+            mu, h = mean_ci(g[m])
+            row[m] = mu
+            row[m + "_ci"] = h
+        out.append(row)
+    return pd.DataFrame(out)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--seeds", type=int, default=10)
+    ap.add_argument("--out", default="results")
+    args = ap.parse_args()
+    out = Path(args.out)
+    out.mkdir(exist_ok=True)
+    cfg = SimConfig()
+    metrics = ["UER", "FBR", "ask_rate", "autonomy", "mistake_catch", "mistake_exec", "cost", "block_rate"]
+
+    all_rows, all_sub, all_prob, bases = [], [], [], []
+    for s in range(args.seeds):
+        rows, sub, prob, base, payload = run_seed(s, cfg, habituations=(0.0, 0.15, 0.30))
+        all_rows += rows; all_sub += sub; all_prob += prob; bases.append(base)
+        if s == 0:
+            json.dump(cases(*payload), open(out / "cases_seed0.json", "w"), indent=2, default=str)
+        print(f"seed {s} done")
+
+    per_seed = pd.DataFrame(all_rows)
+    per_seed.to_csv(out / "per_seed.csv", index=False)
+    summarise(per_seed, ["habituation", "policy"], metrics).to_csv(out / "summary.csv", index=False)
+    summarise(pd.DataFrame(all_sub), ["group", "value", "policy"], metrics + ["n"]).to_csv(out / "subgroups.csv", index=False)
+    summarise(pd.DataFrame(all_prob), ["model", "calibrated"], ["AUROC", "Brier", "ECE"]).to_csv(out / "calibration.csv", index=False)
+    pd.DataFrame(bases).to_json(out / "data_stats.json", orient="records", indent=2)
+
+    cov = coverage_sweep(range(min(args.seeds, 5)), [0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+    cov.to_csv(out / "coverage_per_seed.csv", index=False)
+    summarise(cov, ["coverage", "policy"], ["UER", "ask_rate", "cost", "FBR"]).to_csv(out / "coverage.csv", index=False)
+    print("done")
+
+
+if __name__ == "__main__":
+    main()
