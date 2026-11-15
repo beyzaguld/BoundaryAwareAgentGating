@@ -60,3 +60,43 @@ def pipeline_diagram(path):
     ax.text(1, 41.2, "Baselines on the same proposals: B0 executes every proposal; B1 asks before every proposal.", fontsize=7.8, color="#555555")
     fig.savefig(path, bbox_inches="tight", dpi=200)
     plt.close(fig)
+
+
+def tradeoff(summary, path):
+    s = summary[summary.habituation == 0.15].set_index("policy")
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.8))
+    for ax, x in zip(axes, ["ask_rate", "FBR"]):
+        for p in MAIN + ABL:
+            r = s.loc[p]
+            ax.errorbar(r[x], r["UER"], xerr=r[x + "_ci"], yerr=r["UER_ci"], fmt="o" if p in MAIN else "s",
+                        color=COLORS[p], ms=7 if p in MAIN else 5, capsize=2, label=LABELS[p])
+        ax.set_xlabel({"ask_rate": "Confirmation rate (share of proposals)", "FBR": "False-block rate  P(not executed | wanted)"}[x])
+        ax.set_ylabel("Unintended execution rate (UER)")
+        ax.grid(alpha=0.3)
+    axes[1].legend(fontsize=7, loc="upper right")
+    fig.tight_layout(); fig.savefig(path, bbox_inches="tight"); plt.close(fig)
+
+
+def coverage_plot(cov, path):
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.4))
+    for ax, m, lab in zip(axes, ["cost", "UER"], ["Expected cost per action", "Unintended execution rate"]):
+        for p in ["A_rules", "B_full", "B_no_boundaries"]:
+            g = cov[cov.policy == p].sort_values("coverage")
+            ax.errorbar(g.coverage, g[m], yerr=g[m + "_ci"], marker="o", capsize=2, color=COLORS[p], label=LABELS[p])
+        ax.set_xlabel("Rule coverage (share of (tool, data) pairs with a stated rule)")
+        ax.set_ylabel(lab); ax.grid(alpha=0.3)
+    axes[0].legend(fontsize=8)
+    fig.tight_layout(); fig.savefig(path, bbox_inches="tight"); plt.close(fig)
+
+
+def subgroup_plot(sub, path):
+    sub = sub[(sub.group == "archetype") & sub.policy.isin(["A_rules", "B_full", "B_no_boundaries"])]
+    fig, axes = plt.subplots(1, 2, figsize=(10, 3.2))
+    arche = ["conservative", "balanced", "delegator"]
+    for ax, m, lab in zip(axes, ["UER", "FBR"], ["Unintended execution rate", "False-block rate"]):
+        for i, p in enumerate(["A_rules", "B_full", "B_no_boundaries"]):
+            g = sub[sub.policy == p].set_index("value").loc[arche]
+            ax.bar(np.arange(3) + (i - 1) * 0.26, g[m], 0.26, yerr=g[m + "_ci"], capsize=2, color=COLORS[p], label=LABELS[p])
+        ax.set_xticks(range(3)); ax.set_xticklabels(arche); ax.set_ylabel(lab); ax.grid(alpha=0.3, axis="y")
+    axes[0].legend(fontsize=8)
+    fig.tight_layout(); fig.savefig(path, bbox_inches="tight"); plt.close(fig)
