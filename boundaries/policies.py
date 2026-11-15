@@ -98,3 +98,52 @@ def policy_rules(df, with_ask=True):
     out = np.where(df["rule"] == "ask", ASK if with_ask else EXECUTE, out)
     out = np.where(df["rule"] == "deny", BLOCK, out)
     return out
+
+
+class BoundaryRiskModel:
+    """Design B: gradient-boosted P(approve) with isotonic calibration on held-out users."""
+
+    def __init__(self, use_boundaries=True, hard_deny=True, seed=0):
+        self.use_boundaries = use_boundaries
+        self.hard_deny = hard_deny and use_boundaries
+        self.seed = seed
+        self.tau_lo, self.tau_hi = 0.3, 0.7
+
+    def fit(self, train, val, rules):
+        Xtr = build_features(train, rules, self.use_boundaries)
+        Xva = build_features(val, rules, self.use_boundaries)
+        self.raw = HistGradientBoostingClassifier(max_iter=300, learning_rate=0.05,
+                                                  max_leaf_nodes=31, random_state=self.seed)
+        self.raw.fit(Xtr, train["approve"])
+        self.cal = CalibratedClassifierCV(self.raw, cv="prefit", method="isotonic")
+        self.cal.fit(Xva, val["approve"])
+        return self
+
+    def predict_proba(self, df, rules, calibrated=True):
+        X = build_features(df, rules, self.use_boundaries)
+        m = self.cal if calibrated else self.raw
+        return m.predict_proba(X)[:, 1]
+
+    def decide(self, df, p, tau_lo=None, tau_hi=None):
+        lo = self.tau_lo if tau_lo is None else tau_lo
+        hi = self.tau_hi if tau_hi is None else tau_hi
+        out = np.where(p >= hi, EXECUTE, np.where(p <= lo, BLOCK, ASK))
+        if self.use_boundaries:
+            # an explicitly allowed action is never silently blocked, only escalated to ask
+            out = np.where((df["rule"].values == "allow") & (out == BLOCK), ASK, out)
+        if self.hard_deny:
+            out = np.where(df["rule"].values == "deny", BLOCK, out)
+        return out
+
+    def tune_thresholds(self, val, rules, cost_fn, band=True, grid=np.linspace(0.02, 0.98, 49)):
+        """Choose (tau_lo, tau_hi) minimising expected cost on validation users.
+        band=False forces tau_lo == tau_hi (binary execute/block, the no-ask ablation)."""
+        p = self.predict_proba(val, rules)
+        best = (np.inf, None)
+        pairs = [(lo, hi) for lo in grid for hi in grid if lo < hi] if band else [(t, t) for t in grid]
+        for lo, hi in pairs:
+            c = cost_fn(val, self.decide(val, p, lo, hi))
+            if c < best[0]:
+                best = (c, (lo, hi))
+        self.tau_lo, self.tau_hi = best[1]
+        return self
