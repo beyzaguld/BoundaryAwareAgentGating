@@ -38,3 +38,55 @@ def fit_models(train, val, rules, seed):
     nb.raw, nb.cal = m["B_full"].raw, m["B_full"].cal   # same model, only the ask band removed
     m["B_no_ask_band"] = nb.tune_thresholds(val, rules, cost_fn, band=False)
     return m
+
+
+def all_decisions(test, rules, models):
+    d = {
+        "B0_broad": policy_broad(test),
+        "B1_always_ask": policy_always_ask(test),
+        "A_rules": policy_rules(test, with_ask=True),
+        "A_no_ask_tier": policy_rules(test, with_ask=False),
+    }
+    for name, mdl in models.items():
+        d[name] = mdl.decide(test, mdl.predict_proba(test, rules))
+    return d
+
+
+def run_seed(seed, cfg, habituations=(0.15,)):
+    df, rules = generate(cfg, seed)
+    train, val, test = split_users(df, seed)
+    models = fit_models(train, val, rules, seed)
+    dec = all_decisions(test, rules, models)
+
+    rows, sub_rows = [], []
+    for h in habituations:
+        for name, d in dec.items():
+            r = evaluate(test, d, np.random.default_rng(seed), habituation=h)
+            rows.append({"seed": seed, "policy": name, "habituation": h, **r})
+    # subgroup results at the default habituation
+    groups = {
+        "archetype": test["archetype"],
+        "irreversible": test["reversible"].map({0: "irreversible", 1: "reversible"}),
+        "rule_present": pd.Series(np.where(test["rule"] == "none", "unruled pair", "ruled pair")),
+        "mistake": test["mistake"],
+    }
+    for gname, g in groups.items():
+        for gval in pd.unique(g):
+            mask = (g == gval).values
+            sub = test[mask].reset_index(drop=True)
+            for name, d in dec.items():
+                r = evaluate(sub, d[mask], np.random.default_rng(seed))
+                sub_rows.append({"seed": seed, "group": gname, "value": gval, "policy": name,
+                                 "n": int(mask.sum()), **r})
+
+    prob = []
+    for name in ("B_full", "B_no_boundaries"):
+        for calibrated in (False, True):
+            p = models[name].predict_proba(test, rules, calibrated)
+            prob.append({"seed": seed, "model": name, "calibrated": calibrated,
+                         **prob_metrics(test["approve"].values, p)})
+    thresholds = {k: (m.tau_lo, m.tau_hi) for k, m in models.items()}
+    base = {"seed": seed, "test_actions": len(test), "test_users": test["user_id"].nunique(),
+            "approve_rate": test["approve"].mean(), "mistake_rate": (test["mistake"] != "none").mean(),
+            "rule_coverage_obs": (test["rule"] != "none").mean(), "thresholds": thresholds}
+    return rows, sub_rows, prob, base, (test, dec, models)
