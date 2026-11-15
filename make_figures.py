@@ -100,3 +100,101 @@ def subgroup_plot(sub, path):
         ax.set_xticks(range(3)); ax.set_xticklabels(arche); ax.set_ylabel(lab); ax.grid(alpha=0.3, axis="y")
     axes[0].legend(fontsize=8)
     fig.tight_layout(); fig.savefig(path, bbox_inches="tight"); plt.close(fig)
+
+
+def paired(per_seed, ref, others, metrics, h=0.15):
+    """Paired (same seed, same test users) differences other - ref with 95% t-CI."""
+    d = per_seed[per_seed.habituation == h].set_index(["seed", "policy"])
+    rows = []
+    for o in others:
+        row = {"policy": o}
+        for m in metrics:
+            diff = d.xs(o, level="policy")[m] - d.xs(ref, level="policy")[m]
+            row[m], row[m + "_ci"] = mean_ci(diff)
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def fmt(mu, ci, pct=True, signed=False):
+    if pct:
+        mu, ci = 100 * mu, 100 * ci
+    s = f"{mu:+.1f}" if signed else f"{mu:.1f}"
+    return f"{s} $\\pm$ {ci:.1f}" if pct else (f"{mu:+.3f}" if signed else f"{mu:.3f}") + f" $\\pm$ {ci:.3f}"
+
+
+def tables(res, tab):
+    s = pd.read_csv(res / "summary.csv")
+    s15 = s[s.habituation == 0.15].set_index("policy")
+    lines = []
+    for p in MAIN + ABL:
+        r = s15.loc[p]
+        cells = [fmt(r[m], r[m + "_ci"]) for m in ["UER", "FBR", "ask_rate", "autonomy", "mistake_exec"]]
+        cells.append(fmt(r["cost"], r["cost_ci"], pct=False))
+        if p == ABL[0]:
+            lines.append("\\midrule")
+        lines.append(LABELS[p] + " & " + " & ".join(cells) + " \\\\")
+    (tab / "main.tex").write_text("\n".join(lines) + "\n")
+
+    per_seed = pd.read_csv(res / "per_seed.csv")
+    pr = paired(per_seed, "B_full", ["B_no_boundaries", "B_no_ask_band", "B_soft_deny"], ["UER", "FBR", "ask_rate", "autonomy", "cost"])
+    pa = paired(per_seed, "A_rules", ["A_no_ask_tier"], ["UER", "FBR", "ask_rate", "autonomy", "cost"])
+    lines = []
+    for _, r in pd.concat([pr, pa]).iterrows():
+        cells = [fmt(r[m], r[m + "_ci"], signed=True) for m in ["UER", "FBR", "ask_rate", "autonomy"]]
+        cells.append(fmt(r["cost"], r["cost_ci"], pct=False, signed=True))
+        ref = "A" if r.policy.startswith("A") else "B"
+        lines.append(f"{LABELS[r.policy]} vs.\\ {ref} & " + " & ".join(cells) + " \\\\")
+    (tab / "ablation.tex").write_text("\n".join(lines) + "\n")
+    pd.concat([pr, pa]).to_csv(res / "paired_ablation.csv", index=False)
+
+    sub = pd.read_csv(res / "subgroups.csv")
+    lines = []
+    order = [("archetype", "conservative"), ("archetype", "balanced"), ("archetype", "delegator"),
+             ("irreversible", "irreversible"), ("irreversible", "reversible"),
+             ("rule_present", "ruled pair"), ("rule_present", "unruled pair"),
+             ("mistake", "none"), ("mistake", "off_task"), ("mistake", "overbroad_scope"), ("mistake", "wrong_recipient")]
+    for g, v in order:
+        rr = sub[(sub.group == g) & (sub.value == v)].set_index("policy")
+        n = int(round(rr.loc["B_full", "n"]))
+        cells = []
+        for p in ["A_rules", "B_full", "B_no_boundaries"]:
+            cells += [fmt(rr.loc[p, "UER"], rr.loc[p, "UER_ci"]), fmt(rr.loc[p, "FBR"], rr.loc[p, "FBR_ci"])]
+        lines.append(f"{v.replace('_', ' ')} & {n} & " + " & ".join(cells) + " \\\\")
+    (tab / "subgroups.tex").write_text("\n".join(lines) + "\n")
+
+    hab = s[s.policy.isin(["B1_always_ask", "A_rules", "B_full"])]
+    lines = []
+    for p in ["B1_always_ask", "A_rules", "B_full"]:
+        cells = []
+        for h in (0.0, 0.15, 0.30):
+            r = hab[(hab.policy == p) & (hab.habituation == h)].iloc[0]
+            cells += [fmt(r["UER"], r["UER_ci"]), fmt(r["cost"], r["cost_ci"], pct=False)]
+        lines.append(LABELS[p] + " & " + " & ".join(cells) + " \\\\")
+    (tab / "habituation.tex").write_text("\n".join(lines) + "\n")
+
+    cal = pd.read_csv(res / "calibration.csv")
+    lines = []
+    for _, r in cal.iterrows():
+        lines.append(f"{LABELS[r.model]} & {'isotonic' if r.calibrated else 'raw'} & "
+                     + " & ".join(fmt(r[m], r[m + '_ci'], pct=False) for m in ["AUROC", "Brier", "ECE"]) + " \\\\")
+    (tab / "calibration.tex").write_text("\n".join(lines) + "\n")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--res", default="results")
+    ap.add_argument("--fig", default="../report/figures")
+    ap.add_argument("--tab", default="../report/tables")
+    a = ap.parse_args()
+    res, fig, tab = Path(a.res), Path(a.fig), Path(a.tab)
+    fig.mkdir(parents=True, exist_ok=True); tab.mkdir(parents=True, exist_ok=True)
+    pipeline_diagram(fig / "pipeline.pdf"); pipeline_diagram(fig / "pipeline.png")
+    tradeoff(pd.read_csv(res / "summary.csv"), fig / "tradeoff.pdf")
+    coverage_plot(pd.read_csv(res / "coverage.csv"), fig / "coverage.pdf")
+    subgroup_plot(pd.read_csv(res / "subgroups.csv"), fig / "subgroups.pdf")
+    tables(res, tab)
+    print("figures and tables written")
+
+
+if __name__ == "__main__":
+    main()
