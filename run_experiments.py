@@ -90,3 +90,21 @@ def run_seed(seed, cfg, habituations=(0.15,)):
             "approve_rate": test["approve"].mean(), "mistake_rate": (test["mistake"] != "none").mean(),
             "rule_coverage_obs": (test["rule"] != "none").mean(), "thresholds": thresholds}
     return rows, sub_rows, prob, base, (test, dec, models)
+
+
+def coverage_sweep(seeds, coverages):
+    rows = []
+    for cov in coverages:
+        for s in seeds:
+            cfg = SimConfig(rule_coverage=cov)
+            df, rules = generate(cfg, s)
+            train, val, test = split_users(df, s)
+            cost_fn = expected_cost_fn()
+            pol = {"A_rules": policy_rules(test)}
+            for name, ub in (("B_full", True), ("B_no_boundaries", False)):
+                m = BoundaryRiskModel(ub, ub, s).fit(train, val, rules).tune_thresholds(val, rules, cost_fn)
+                pol[name] = m.decide(test, m.predict_proba(test, rules))
+            for name, d in pol.items():
+                rows.append({"coverage": cov, "seed": s, "policy": name,
+                             **evaluate(test, d, np.random.default_rng(s))})
+    return pd.DataFrame(rows)
