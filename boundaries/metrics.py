@@ -42,3 +42,35 @@ def evaluate(df, decisions, rng, ask_acc0=ASK_ACC0, habituation=HABITUATION):
         "cost": (COST_UNINTENDED * unintended + COST_FALSE_BLOCK * false_block + COST_ASK * asked).mean(),
         "block_rate": (decisions == BLOCK).mean(),
     }
+
+
+def expected_cost_fn(rng_seed=12345):
+    """Deterministic cost function used for threshold tuning on validation users."""
+    def f(df, decisions):
+        return evaluate(df, decisions, np.random.default_rng(rng_seed))["cost"]
+    return f
+
+
+def ece(y, p, n_bins=10):
+    """Expected calibration error with equal-width bins."""
+    bins = np.minimum((p * n_bins).astype(int), n_bins - 1)
+    e = 0.0
+    for b in range(n_bins):
+        m = bins == b
+        if m.any():
+            e += m.mean() * abs(y[m].mean() - p[m].mean())
+    return e
+
+
+def prob_metrics(y, p):
+    return {"AUROC": roc_auc_score(y, p), "Brier": brier_score_loss(y, p), "ECE": ece(y, p)}
+
+
+def mean_ci(x, conf=0.95):
+    """Mean and t-based confidence half-width across seeds."""
+    x = np.asarray(x, float)
+    x = x[~np.isnan(x)]
+    if len(x) < 2:
+        return float(np.mean(x)), float("nan")
+    h = stats.t.ppf((1 + conf) / 2, len(x) - 1) * x.std(ddof=1) / np.sqrt(len(x))
+    return float(x.mean()), float(h)
