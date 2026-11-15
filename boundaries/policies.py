@@ -4,7 +4,8 @@ B0  broad permission        : execute everything (status quo of one-time broad g
 B1  always confirm          : ask before every action
 A   scoped rules            : user-defined allow/ask/deny rules + static risk tier for unruled pairs
 B   boundary-aware risk model: calibrated P(approve) conditioned on action AND user boundaries,
-                              deny rules as hard constraints, uncertainty band -> ask
+                              deny rules as hard constraints, cost-tuned three-way rule
+                              (execute above tau_hi, block at or below tau_lo, ask in between)
 """
 import numpy as np
 import pandas as pd
@@ -92,28 +93,38 @@ def static_tier(df):
 
 def policy_rules(df, with_ask=True):
     """Design A. Explicit user rules first; static risk tier for unruled pairs.
-    with_ask=False is the allow/deny-list ablation (ask rules and fallback both execute)."""
+    with_ask=False removes only the static risk tier: unruled pairs execute, while the
+    user's explicit allow/ask/deny rules are still applied unchanged."""
     out = static_tier(df) if with_ask else np.full(len(df), EXECUTE)
     out = np.where(df["rule"] == "allow", EXECUTE, out)
-    out = np.where(df["rule"] == "ask", ASK if with_ask else EXECUTE, out)
+    out = np.where(df["rule"] == "ask", ASK, out)
     out = np.where(df["rule"] == "deny", BLOCK, out)
     return out
 
 
 class BoundaryRiskModel:
-    """Design B: gradient-boosted P(approve) with isotonic calibration on held-out users."""
+    """Design B: gradient-boosted P(approve) with isotonic calibration on held-out users.
+
+    use_boundaries: whether the model sees the user's boundary features (rule for this pair,
+                    rule profile). Rule enforcement below does not depend on it.
+    hard_deny:      whether a deny rule always blocks.
+    An explicit allow rule is never silently blocked (escalated to ask) in every variant."""
 
     def __init__(self, use_boundaries=True, hard_deny=True, seed=0):
         self.use_boundaries = use_boundaries
-        self.hard_deny = hard_deny and use_boundaries
+        self.hard_deny = hard_deny
         self.seed = seed
         self.tau_lo, self.tau_hi = 0.3, 0.7
 
     def fit(self, train, val, rules):
         Xtr = build_features(train, rules, self.use_boundaries)
         Xva = build_features(val, rules, self.use_boundaries)
+        # early_stopping=True is what scikit-learn's default ("auto") already does for >10,000
+        # training rows; stated explicitly so the setting is visible (10% internal validation
+        # split, stop after 10 iterations without improvement).
         self.raw = HistGradientBoostingClassifier(max_iter=300, learning_rate=0.05,
-                                                  max_leaf_nodes=31, random_state=self.seed)
+                                                  max_leaf_nodes=31, early_stopping=True,
+                                                  random_state=self.seed)
         self.raw.fit(Xtr, train["approve"])
         self.cal = CalibratedClassifierCV(self.raw, cv="prefit", method="isotonic")
         self.cal.fit(Xva, val["approve"])
@@ -128,9 +139,8 @@ class BoundaryRiskModel:
         lo = self.tau_lo if tau_lo is None else tau_lo
         hi = self.tau_hi if tau_hi is None else tau_hi
         out = np.where(p >= hi, EXECUTE, np.where(p <= lo, BLOCK, ASK))
-        if self.use_boundaries:
-            # an explicitly allowed action is never silently blocked, only escalated to ask
-            out = np.where((df["rule"].values == "allow") & (out == BLOCK), ASK, out)
+        # an explicitly allowed action is never silently blocked, only escalated to ask
+        out = np.where((df["rule"].values == "allow") & (out == BLOCK), ASK, out)
         if self.hard_deny:
             out = np.where(df["rule"].values == "deny", BLOCK, out)
         return out

@@ -11,7 +11,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from boundaries.metrics import evaluate, expected_cost_fn, mean_ci, prob_metrics
+from boundaries.metrics import (HABITUATION, evaluate, expected_cost_fn, mean_ci, metrics_from,
+                                prob_metrics, resolve_all)
 from boundaries.policies import (BoundaryRiskModel, policy_always_ask, policy_broad,
                                  policy_rules, EXECUTE, ASK, BLOCK)
 from boundaries.sim import SimConfig, describe, generate
@@ -31,7 +32,8 @@ def fit_models(train, val, rules, seed):
     cost_fn = expected_cost_fn()
     m = {
         "B_full": BoundaryRiskModel(True, True, seed).fit(train, val, rules).tune_thresholds(val, rules, cost_fn),
-        "B_no_boundaries": BoundaryRiskModel(False, False, seed).fit(train, val, rules).tune_thresholds(val, rules, cost_fn),
+        # removes only the boundary FEATURES from the model; deny rules and the allow floor stay enforced
+        "B_no_boundaries": BoundaryRiskModel(False, True, seed).fit(train, val, rules).tune_thresholds(val, rules, cost_fn),
         "B_soft_deny": BoundaryRiskModel(True, False, seed).fit(train, val, rules).tune_thresholds(val, rules, cost_fn),
     }
     nb = BoundaryRiskModel(True, True, seed)
@@ -63,7 +65,10 @@ def run_seed(seed, cfg, habituations=(0.15,)):
         for name, d in dec.items():
             r = evaluate(test, d, np.random.default_rng(seed), habituation=h)
             rows.append({"seed": seed, "policy": name, "habituation": h, **r})
-    # subgroup results at the default habituation
+    # subgroup results at the default habituation: slices of the SAME resolved test run as the
+    # main table (same seed, same per-user fatigue), so each subgroup row is a slice of Table 1
+    executed = {name: resolve_all(test, d, np.random.default_rng(seed), habituation=HABITUATION)
+                for name, d in dec.items()}
     groups = {
         "archetype": test["archetype"],
         "irreversible": test["reversible"].map({0: "irreversible", 1: "reversible"}),
@@ -75,7 +80,7 @@ def run_seed(seed, cfg, habituations=(0.15,)):
             mask = (g == gval).values
             sub = test[mask].reset_index(drop=True)
             for name, d in dec.items():
-                r = evaluate(sub, d[mask], np.random.default_rng(seed))
+                r = metrics_from(sub, d[mask], executed[name][mask])
                 sub_rows.append({"seed": seed, "group": gname, "value": gval, "policy": name,
                                  "n": int(mask.sum()), **r})
 
@@ -102,7 +107,7 @@ def coverage_sweep(seeds, coverages):
             cost_fn = expected_cost_fn()
             pol = {"A_rules": policy_rules(test)}
             for name, ub in (("B_full", True), ("B_no_boundaries", False)):
-                m = BoundaryRiskModel(ub, ub, s).fit(train, val, rules).tune_thresholds(val, rules, cost_fn)
+                m = BoundaryRiskModel(ub, True, s).fit(train, val, rules).tune_thresholds(val, rules, cost_fn)
                 pol[name] = m.decide(test, m.predict_proba(test, rules))
             for name, d in pol.items():
                 rows.append({"coverage": cov, "seed": s, "policy": name,
